@@ -10,11 +10,11 @@ process BcftoolsConvert {
   input:
     tuple (val(chromosome), path(vcf), path(vcf_idx))
   output:
-    tuple( path("calls.bcf"), path("calls.bcf.csi"), val(chromosome))
+    tuple( path("calls.bcf.gz"), path("calls.bcf.gz.csi"), val(chromosome))
  script:
     """
-      bcftools view -Ob  $vcf -o calls.bcf -r $chromosome
-      bcftools index calls.bcf
+      bcftools view -Ob  $vcf -o calls.bcf.gz -r $chromosome
+      bcftools index calls.bcf.gz
     """
 }
 
@@ -24,28 +24,36 @@ process ShapeIt4 {
     memory '2 GB'
 
   input:
-    tuple(path(chromosome_calls_bcf), path(chromosome_calls_bcf_idx), val(chromosome), path(haplotype_reference_dir))
+    tuple(path(chromosome_calls_bcf), path(chromosome_calls_bcf_idx), val(chromosome), path(haplotype_reference_tar))
   output:
     val(chromosome), emit: chromosome
-    path "chromosome_phased.bcf", emit: phased_bcf
+    path("haplotypes.csv.gz"), emit: haps_csv
+    path("haplotypes.csv.gz.yaml"), emit: haps_csv_yaml
   script:
     """
-        shapeit4 --input $chromosome_calls_bcf --map $haplotype_reference_dir/${chromosome}.b38.gmap.gz --region $chromosome --reference ${haplotype_reference_dir}/CCDG_14151_B01_GRM_WGS_2020-08-05_${chromosome}.filtered.*.bcf --output chromosome_phased.bcf --seed 2
+        genotype_and_phase_snps infer-haps \
+         --input_bcf_file $chromosome_calls_bcf \
+         --thousand_genomes_tar $haplotype_reference_tar \
+         --chromosome $chromosome \
+         --output_csv haplotypes.csv.gz \
+         --tempdir temp
     """
 }
 
 
-process BcftoolsConcat {
+process CsverveConcat {
     time '24h'
     memory '2 GB'
 
   input:
-    path(phased_bcfs, stageAs: "?/*")
+    path(hap_csvs, stageAs: "?/*")
+    path(hap_csv_yamls, stageAs: "?/*")
   output:
-    path "merged_calls.bcf", emit: bcf_file
+    path "merged_calls.csv.gz", emit: csv_file
+    path "merged_calls.csv.gz.yaml", emit: csv_yaml_file
   script:
     """
-      bcftools concat -o merged_calls.bcf  $phased_bcfs
+      csverve concat --out_f merged_calls.csv.gz `echo "$hap_csvs" | sed 's/[^ ]* */--in_f &/g'`
     """
 }
 
@@ -54,19 +62,16 @@ process BcftoolsConcat {
 workflow{
 
     chromosomes_ch = Channel.from(params.chromosomes)
-    reference_ch = Channel.fromPath(params.reference)
     vcf = Channel.fromPath(params.vcf)
     vcf_idx = Channel.fromPath(params.vcf_idx)
-    reference_haplotyping_dir = Channel.fromPath(params.ref_dir)
-
-    //chromosomes_ch.combine(vcf).combine(vcf_idx).view()
-    //BcftoolsConvert(tuple(chromosomes_ch, vcf, vcf_idx))
+    reference_haplotyping_tar = Channel.fromPath(params.ref_tar)
 
 
-    chromosomes_ch | flatten | combine(vcf)|combine(vcf_idx) | BcftoolsConvert | combine(reference_haplotyping_dir) | ShapeIt4
+    chromosomes_ch | flatten | combine(vcf)|combine(vcf_idx) | BcftoolsConvert | combine(reference_haplotyping_tar) | ShapeIt4
 
-    BcftoolsConcat(ShapeIt4.out.phased_bcf.collect())   
-   
-    BcftoolsConcat.out.bcf_file.subscribe { it.copyTo(params.out_dir) }
+    CsverveConcat(ShapeIt4.out.haps_csv.collect(), ShapeIt4.out.haps_csv_yaml.collect())
+
+    CsverveConcat.out.csv_file.subscribe { it.copyTo(params.out_csv) }
+    CsverveConcat.out.csv_file.subscribe { it.copyTo(params.out_csv_yaml) }
 }
 
