@@ -10,11 +10,11 @@ process BcftoolsConvert {
   input:
     tuple (val(chromosome), path(vcf), path(vcf_idx))
   output:
-    tuple( path("calls.bcf.gz"), path("calls.bcf.gz.csi"), val(chromosome))
+    tuple( path("calls.vcf.gz"), path("calls.vcf.gz.csi"), val(chromosome))
  script:
     """
-      bcftools view -Ob  $vcf -o calls.bcf.gz -r $chromosome
-      bcftools index calls.bcf.gz
+      bcftools view -Oz  $vcf -o calls.vcf.gz -r $chromosome
+      bcftools index calls.vcf.gz
     """
 }
 
